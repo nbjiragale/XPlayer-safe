@@ -62,7 +62,8 @@ Status: **Confirmed** = I saw it directly in the file. **Suspected** = it looks 
 - **Proposed fix:** Make `yrf.<clinit>` do nothing (patch the DEX directly), in both `classes.dex` and `classes3.dex`. Delete both `libyrf.so`. Remove `classes3.dex` after checking that nothing needs it. Remove the four `assets/` blobs only if F-02 shows they belong to this code.
 
 ### F-02 — Native library `libyrf.so` with hidden behavior (and a hidden dialog)
-- **Severity:** High — **Status:** Suspected (library exists: Confirmed; what it does: not verified)
+- **Severity:** High — **Status:** Confirmed (updated in Phase 2: the library's strings were decoded; its machine code was not disassembled)
+- **Update (Phase 2):** The library holds base64 strings that decode to `https://pastebin.com/raw/0NEmugw4`, the hash of the mod's own signing key, and the names `META-INF/BNDLTOOL.RSA` and `META-INF/YOUAREFINISHED.RSA`. It is an **update/credits notice and anti-tamper module** run by the mod author. The Pastebin page (read once, as data) is a 96 KB JSON table of app package names with version numbers (691 apps) plus one link, `https://t.me/youarefinished_mods`. The author can change that page or link at any time, so the dialog can be pointed anywhere. I found no stolen-data upload in what I could read.
 - **Where:** `lib/*/libyrf.so` (stripped; arm64 473 KB). Java side: `bin/ghost/YRF.smali`, `cp.smali`, `gho.smali`, `cup.smali`, `dw.smali` (all `native` methods).
 - **What I saw:**
   - JNI bridge strings for `HttpURLConnection.openConnection`, `AsyncTask`, `SharedPreferences`, `Toast`, `startActivity`, `AlertDialog`, `MessageDigest`, `CertificateFactory`, `ZipEntry`, and reflection.
@@ -175,8 +176,8 @@ For F-06, F-07, F-10 I cannot say if the original has them. A diff against the o
 
 ## 6. Not verified
 
-- **What `libyrf.so` really does.** It is stripped, uses encoded strings, and I did not disassemble it. I cannot rule out network calls, file access or UI beyond what I listed.
-- **The four `assets/` blobs.** `sadfds_l23ol-zp5` (6.3 KB), `q-peai6_mck` (17.5 KB), `23o-as_pawer2tw` (9.7 KB) and `pqhp8-64_36mu` (33 bytes) are high-entropy and look XOR-encoded. No DEX code reads them by name, so only native code could. Contents unknown.
+- **Full behavior of `libyrf.so`.** Its strings were decoded (see F-02), but I did not disassemble the machine code. The library is removed in the fixed APK, so this no longer matters for that build.
+- **The four `assets/` blobs — RESOLVED in Phase 2.** `sadfds_l23ol-zp5`, `q-peai6_mck`, `23o-as_pawer2tw` and `pqhp8-64_36mu` are XOR-encoded (6-byte key) JSON for the app's built-in **downloader/browser**: a list of supported sites, JavaScript snippets that watch page requests on Instagram, Facebook and X and pass video links to the app (`GetPear` bridge), and a YouTube URL pattern. They are read by `libitcore.so`, not by `libyrf.so`. No outside server and no cookie/password upload is in them. They are part of the downloader feature (see F-10) and were left in place.
 - **~85% of the Java code** cannot be read as source (F-04). My scan covered the raw bytecode for known APIs and strings. It cannot find logic that hides behind reflection, string building or native code.
 - **Behavior of `w53`/`vf`** (F-06) and the cookie handling in the in-app browser (F-10).
 - **Anything that happens at run time**: server responses, remote config (Firebase Remote Config is present), and downloaded code.
