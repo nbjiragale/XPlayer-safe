@@ -187,3 +187,22 @@ For F-06, F-07, F-10 I cannot say if the original has them. A diff against the o
 ## 7. Verdict (not a safety claim)
 
 The mod is **not** a plain re-sign. It adds signature-spoofing code and a hidden native library, and it hides the rest of the code behind a decompiler-breaking tool. I found no direct proof of data theft in what I could read. The unreadable parts could hide it. I would not trust this APK.
+
+---
+
+## 8. Addendum (end of Phase 2): updates and corrections to the findings above
+
+- **Code is now readable.** The Smob junk (an invalid-size data block added to almost every method) can be blanked in an analysis-only copy. With that, apktool reads all 17,719 classes (0 errors) and jadx reads them with 51 errors. Sections 2 and 6 ("~85% unreadable") are therefore out of date. Everything below was checked on readable code.
+- **F-01 correction.** The mod's Java hook `killPM` is not only the mod's trick: the real app *needs* it to keep working after any re-signing (see F-15). A fix that removes it entirely makes the app close itself. The right fix is to remove only the unknown parts (native library, native helper, file redirect) and keep `killPM`.
+- **F-02 (confirmed).** `libyrf.so` is an update/credits and anti-tamper module that reads `https://pastebin.com/raw/0NEmugw4` and a Telegram link. Removed.
+- **F-10 (reviewed).** `defpackage.ma2` is the JavaScript bridge (its name is decrypted at runtime). It builds download candidates from pages the user opens. Cookies are read per site URL, stored in the download job for the same site, or checked for login markers (`c_user`, `ds_user_id`, `sessionid`). No upload code. Not removed.
+- **F-12 (reviewed).** `Runtime.exec`/`ProcessBuilder` run `getprop` with fixed keys (for example `ro.build.version.emui`, `arc.net.ipv4.host_address`) and one own-app logcat reader. Not changed.
+- **Native libraries (13 non-mod).** No imports of `exec`, `fork`, `system`, `popen`. Only `libinxffm` (FFmpeg) imports socket functions. `libmmkv` uses `sendfile` for file copy. `libx264` and `libinxplayer` use `dlopen` for optional system libraries. No hard-coded hosts.
+- **Hidden strings.** The app hides ~870 of its own strings via `f82.g(base64, key)` → native `Decoder.decodeBytesNative`. Algorithm: base64 decode, then XOR every second byte (positions 0, 2, 4 …, only `len/2` of them) with a 16-byte key. The key is a 12-byte constant (one of three, chosen by which characters appear in the 8-character second argument) joined with 4 characters of that argument. 869 of 873 strings decode; 502 are unique. They contain only video-site URLs, HTTP header names, content types and X's well-known public web bearer token.
+
+### F-15 — The real app protects itself against re-signing (new, Info)
+- **Status:** Confirmed
+- **Where:** `defpackage.ez4` … `rz4` (14 classes, checks inlined in `p32` and the `a.m.z.*` activities); `libitcore.so` `JNI_OnLoad` (length check `0x652`, then `strcmp` against the embedded 809-byte developer certificate).
+- **What it does:** Each check takes `signatures[0].toCharsString()`, cuts a 31-character slice (for example `substring(1250, 1281)`), compares it with a baked-in constant such as `774d6bfd1d85da3a45284cd5f00ebde`, and on mismatch calls `Process.killProcess` and `System.exit(0)`. `libitcore.so` logs "signature is error" and fails to load. When it fails to load, every `f82.g(...)` string is returned undecoded.
+- **Why it matters:** Any re-signed build, including mine, trips this. It is the developer's anti-piracy, not a user-facing security feature. It also explains why the mod author installed `killPM`.
+- **Handling:** Keep the pure-Java `killPM` hook (in-process only). Do not try to patch 14 randomised inline checks and two native libraries by hand.

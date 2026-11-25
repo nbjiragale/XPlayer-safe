@@ -1,7 +1,7 @@
 # CHANGES.md — every change made to Xplayer.apk (Phase 2: FIX)
 
 Original: `Xplayer.apk`, SHA-256 `08fc8cca89c1315954a9d9dd82218dc901ef58e334e1b2b7f778f8dc41988847` (never edited).
-Result: `XPlayer_cleaned_signed.apk`, SHA-256 `899ae2784d490cfd2600273caaa8ccc93e45b7a47f5e1cfec57d9d0431080a10`.
+Result: `XPlayer_cleaned_signed.apk`, SHA-256 `03ed706b8fb4be77f2224b5f518f2f3f526ca8c85158410d55850b4697137128`.
 
 Method: the code was **not** rebuilt from smali. apktool and jadx cannot read ~85% of the classes (Smob obfuscation), so a normal rebuild would have deleted them. Instead:
 1. `apktool d -s` (code left untouched), edit manifest and resources, `apktool b`.
@@ -12,27 +12,34 @@ Each change was done one at a time and checked before the next one.
 
 ---
 
-## Change 1 — F-01 / F-02: remove the signature-spoofing hook and the hidden native library
+## Change 1 — F-01 / F-02: remove the unknown native library and the remote-controlled parts, but keep the small Java signature hook the app needs
 
-**Before:** `bin.ghost.yrf.<clinit>` (the Application base class) ran first at every start: it loaded `libyrf.so`, bypassed Android's hidden-API protection, and called `killPM(...)` to fake the app certificate. `libyrf.so` (both ABIs) also held a Pastebin address (`https://pastebin.com/raw/0NEmugw4`) and a Telegram link (`t.me/youarefinished_mods`) for a remote update/credits dialog.
+**Correction (later in Phase 2).** My first version of this change turned the whole startup method into an immediate `return`. That was wrong. The *real* app protects itself: it reads its own signing certificate and shuts the process down if it is not the developer's (14 inlined checks, class family `ez4` to `rz4`, plus `libitcore.so`, which refuses to load with any other signature). A re-signed app without the hook would silently close itself, and the string decoder would not load. The mod's Java hook `killPM` is what makes those checks pass. So the fix keeps only that hook. The earlier two APKs I sent are **superseded**.
 
-**After:** `<clinit>` returns at once. `libyrf.so` (2 files) and `classes3.dex` (a duplicate of the `bin.ghost` classes) are deleted.
+**Before:** `bin.ghost.yrf.<clinit>` (the Application base class) ran first at every start and did four things:
+1. `System.loadLibrary("yrf")` (unknown native library; also held `https://pastebin.com/raw/0NEmugw4` and `t.me/youarefinished_mods`)
+2. `gho.z(true)` (native helper)
+3. `killPM(pkg, <original cert>)` (pure Java: makes `PackageInfo` report the original certificate **inside this process only**)
+4. `killOpen(...)` (file-open redirect; had empty arguments, so it already did nothing)
 
-DEX bytes (classes.dex), at file offset 5,442,484:
+**After:** only step 3 remains. Exact DEX bytes (classes.dex, file offsets):
 ```
-before: 1a 04      const-string v4, "yrf"        (start of loadLibrary/killPM sequence)
-after : 0e 00      return-void
+5442490 : 71 10 f5 b3 00 00  -> 00 00 00 00 00 00   nop  System.loadLibrary("yrf")
+5442504 : 71 10 c1 22 00 00  -> 00 00 00 00 00 00   nop  gho.z(true)
+5442550 : 71 40 dc 22 31 20  -> 00 00 00 00 00 00   nop  killOpen(...)
 ```
-The rest of the old method is dead code after `return-void`. Other bytes changed: only the DEX header checksum (offset 8) and SHA-1 (offset 12).
+(The 4-byte `const-string` at 5442484 is unchanged from the original. Everything else changed in the header only: checksum and SHA-1.)
 
 Files removed from the APK:
 ```
 - lib/arm64-v8a/libyrf.so
 - lib/armeabi-v7a/libyrf.so
-- classes3.dex
+- classes3.dex            (duplicate copy of the 19 bin.ghost classes; the live copy is in classes.dex)
 - META-INF/YOUAREFINISHED.RSA / .SF / MANIFEST.MF  (old signature; replaced in Change 7)
 ```
-Check: re-parsed the new `classes.dex`: `bin.ghost.yrf.<clinit>` first instruction is `return-void`; 13,149 classes still parse. No `libyrf`, `classes3`, `pastebin` or `youarefinished` string remains in any DEX, lib or resource.
+Check: re-parsed the final `classes.dex`: the only real call left in `bin.ghost.yrf.<clinit>` is `killPM`; 13,149 classes still parse. No `libyrf`, `classes3`, `pastebin` or `youarefinished` string remains anywhere in the APK.
+
+**Why keeping `killPM` is a trade-off:** it still lies about the certificate to code *inside this app*, and it uses Java reflection and `Unsafe` to do it. It needs to work on your Android version. If it fails, the app will close itself or crash at start (see REPORT.md, emulator tests). It does not touch other apps.
 
 ---
 
@@ -145,9 +152,16 @@ The unused `w53` object is still created in three places but is no longer instal
 
 ## Optional variant — "strict" build (removes the two biggest permissions)
 
-Same as the main build, plus (`XPlayer_strict_signed.apk`, SHA-256 `f72c0ec4befb1be5d62cb8ff91677cab78e6dedc133de10be262cfc445b78782`, same signing key):
+Same as the main build, plus (`XPlayer_strict_signed.apk`, SHA-256 `8a58e9872019c07b0e49311985da597290c595ab424999d7237ac0afc572fe94`, same signing key):
 ```diff
 -    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 -    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
 ```
-`classes.dex` is byte-identical to the main build. **Not tested at run time.** The app's permission library may throw when the app asks for one of these missing permissions (for example on the first-run permission screen on Android 11+), so it can crash or get stuck. Test it in an emulator. If it works, prefer it over the main build. If it crashes, use the main build and do not grant all-files or overlay access.
+`classes.dex` is byte-identical to the main build.
+
+**Why I expect it to work (code read, not run):**
+- The app's own storage gates accept either all-files access **or** the media permissions: `ob5.t()` and `ob5.y()` return true if `READ_MEDIA_VIDEO` (and friends) *or* `isExternalStorageManager()` is granted. So the permission screen does not trap you without all-files access.
+- The overlay permission is only *read* by the app (`Settings.canDrawOverlays`), and returns false when not granted. The floating/pop-up player is simply off.
+- The permission library's strict storage check (`l85.g`) should not fire: `ScopedStorage=true` and `requestLegacyExternalStorage=true` are already set, and the media permissions stay declared. I found no place in the app's own code that asks the library for all-files or overlay access (the all-files screen is opened with a direct Settings intent, `ob5.P`). I did not trace every caller of the library, so this stays unverified.
+
+**Not tested at run time.** Prefer the strict build if it opens and plays files; use the main build if it does not.

@@ -2,98 +2,105 @@
 
 ## 1. Summary
 
-- The APK was a modded XPlayer 3.0.0 (`video.player.videoplayer`). Phase 1 found 14 findings. Phase 2 fixed the ones that could be fixed safely, one at a time, and checked each fix before the next.
-- **This is not a claim that the app is safe.** I cannot make it "100% safe", and nobody can from static analysis. About 85% of the app's code is deliberately scrambled so that normal tools cannot read it. I checked it by scanning bytecode for known dangerous calls, which cannot prove the absence of hidden logic. I also could not run the app.
-- What changed: the signature-spoofing hook, the hidden native library (with its remote Pastebin/Telegram link), the trust-everything HTTPS code, the device admin, plain-HTTP traffic, one useless permission, and two unneeded exported receivers. The APK is re-signed with a key you control.
-- What did not change: the Smob scrambling, the ad/tracker SDKs, the downloader module, the all-files and overlay permissions, root/emulator checks, and the other items in section 4.
+- The APK is a modded XPlayer 3.0.0 (`video.player.videoplayer`). Phase 1 found 14 findings. Phase 2 fixed what could be fixed safely, one change at a time, and checked each change before the next. After you pushed me to close the "not verified" items, I found real problems in my own first fixes and corrected them.
+- **This is not a claim that the app is safe.** Nobody can prove that from static analysis. But the biggest blind spot is gone: the app's code was 85% unreadable because of an obfuscator, and I got around that. I read it, decoded the ~870 strings it hides, and checked every native library by what it can call. I found no sign of data theft or a hidden control server in what I could read.
+- **Important correction.** The two APKs I sent earlier were **wrong**. They removed the mod's whole startup hook. But the real XPlayer has its own anti-tamper (14 inlined checks plus its native decoder `libitcore.so`) that closes the app if the signing certificate is not the developer's. Those builds would have shut themselves down. The new builds below keep only the small Java hook that the app needs for that, and nothing else from the mod.
 
-**Deliverables**
+**Use these files (they replace the earlier APKs):**
 
-| File | Where |
+| File | SHA-256 |
 |---|---|
-| Cleaned, signed APK | `/tmp/claude-0/-home-user-XPlayer-safe/49bf11d1-7853-5759-a5cd-203f796f3864/scratchpad/final/XPlayer_cleaned_signed.apk` (43,333,739 bytes, SHA-256 `899ae278…080a10`) |
-| Findings | `FINDINGS.md` (this repository) |
-| Every change, with diffs and byte patches | `CHANGES.md` (this repository) |
-| This report | `REPORT.md` (this repository) |
+| `XPlayer_cleaned_signed.apk` (main build) | `03ed706b8fb4be77f2224b5f518f2f3f526ca8c85158410d55850b4697137128` |
+| `XPlayer_strict_signed.apk` (no all-files and no overlay permission) | `8a58e9872019c07b0e49311985da597290c595ab424999d7237ac0afc572fe94` |
+
+Both are in `/tmp/claude-0/-home-user-XPlayer-safe/49bf11d1-7853-5759-a5cd-203f796f3864/scratchpad/final/` and were sent to you as attachments.
+
+| Secret | Where |
+|---|---|
 | Keystore | `/tmp/claude-0/-home-user-XPlayer-safe/49bf11d1-7853-5759-a5cd-203f796f3864/scratchpad/signing/xplayer-safe.jks` |
 | **Keystore password (separate note)** | `/tmp/claude-0/-home-user-XPlayer-safe/49bf11d1-7853-5759-a5cd-203f796f3864/scratchpad/signing/KEYSTORE_PASSWORD.txt` |
 
-The keystore and password are **not** in the repository (`.gitignore` blocks `*.apk`, `*.jks`, `*.keystore`, `KEYSTORE*`, `*PASSWORD*`). The scratchpad folder can be cleared when the session ends, so copy these files somewhere safe now. If you lose the keystore, you cannot ship an update that installs over this build.
+Neither is in the repository (`.gitignore` blocks `*.apk`, `*.jks`, `*.keystore`, `KEYSTORE*`, `*PASSWORD*`). The scratchpad can be cleared when the session ends, so copy these files somewhere safe.
 
-## 2. All findings and what happened to each
+## 2. What I found while closing the "not verified" items
+
+1. **The code was unreadable on purpose.** A tool called Smob adds one junk data block with an invalid size to almost every method (20,835 of 20,845 in one file). That crashes apktool and jadx. I made an **analysis-only** copy with those blocks blanked out (same size, never installed or shipped). Result: apktool errors went from 14,945 to 0, and jadx errors from 341,580 to 51. All 17,719 classes became readable.
+2. **`libyrf.so` is the mod author's update/credits and anti-tamper module.** It reads `https://pastebin.com/raw/0NEmugw4` (a 96 KB JSON table of 691 apps' version numbers plus one link, `https://t.me/youarefinished_mods`). The author can change that page or link at any time. I found no data-upload code in what I could read. It is removed.
+3. **The four odd asset files are not the mod's.** They are XOR-encoded config for the app's own downloader (site list, page scripts, a YouTube URL pattern), read by `libitcore.so`. No outside server in them.
+4. **The real app protects itself.** `dev.in.decode.Decoder` (`libitcore.so`) embeds the developer's exact certificate (809 bytes) and refuses to load without it. 14 near-identical checks (`ez4` … `rz4`) read a 31-character slice of the certificate and kill the process on mismatch. This is why the mod faked the certificate. I kept only the small pure-Java `killPM` hook for that (see section 4).
+5. **The app hides ~870 of its own strings** behind a native decoder. I reverse-engineered it (base64, then XOR on every second byte, with a key chosen by the string's 8-character argument) and decoded 869 of 873. Result: 502 unique strings. All point at video sites the downloader scrapes (Bilibili, Dailymotion, Rutube, Reddit, X, imgur, `cdnfast.sbs`, and several adult video sites) plus HTTP header names. **No telemetry, upload or control server, no shell commands, no passwords.**
+6. **Cookies stay local.** The downloader reads each site's cookie and puts it into the download request for the same site, or checks it for a login marker. Nothing goes to a third party.
+7. **Native libraries.** None of the 13 other libraries imports `exec`, `fork`, `system` or `popen`. Only `libinxffm` (FFmpeg) opens sockets, as expected for streaming. No hard-coded hosts.
+
+## 3. All findings and what happened to each
 
 | ID | Severity | Finding | Result |
 |---|---|---|---|
-| F-01 | High | Signature-spoofing code runs first at startup (`bin.ghost.yrf`) | **Fixed** (Change 1) |
-| F-02 | High | Hidden native library `libyrf.so`; remote Pastebin table and Telegram link; anti-tamper | **Fixed** — library and its duplicate `classes3.dex` removed (Change 1) |
-| F-03 | High | Re-signed with a weak generic key (`youarefinished`) | **Fixed as far as possible** — now signed with your own RSA-4096 key. The original developer's signature cannot be restored (Change 7) |
-| F-04 | High | "Smob" obfuscation that breaks decompilers | **Not fixable** — cannot be reversed without the original build. Worked around it (see section 4) |
+| F-01 | High | Signature-spoofing code runs first at startup (`bin.ghost.yrf`) | **Replaced, not just removed.** Unknown native library, native helper and file redirect are cut. The small pure-Java `killPM` stays because the app's own anti-tamper needs it (Change 1) |
+| F-02 | High | Hidden native library `libyrf.so`, remote Pastebin table and Telegram link | **Fixed** — removed with its duplicate `classes3.dex` |
+| F-03 | High | Re-signed with a weak generic key (`youarefinished`) | **Fixed as far as possible** — now signed with your own RSA-4096 key. The developer's signature cannot be restored |
+| F-04 | High | "Smob" obfuscation that breaks decompilers | **Not reversed in the APK** (it does not change what the code does). **Worked around for analysis**, so the code could be read |
 | F-05 | Medium | Cleartext HTTP allowed app-wide | **Fixed** (Change 2) — see side effects |
-| F-06 | Medium | Trust-everything HTTPS certificate checker, plus allow-all hostname check | **Fixed** (Change 5) |
+| F-06 | Medium | Trust-everything HTTPS certificate checker + allow-all hostname check | **Fixed** (Change 5) |
 | F-07 | Medium | Device-admin receiver | **Fixed** — receiver removed (Change 3). File Protection feature is lost |
-| F-08 | Medium | Sensitive permissions | **Partly fixed** — `READ_CLIPBOARD` removed. **Kept:** `MANAGE_EXTERNAL_STORAGE`, `SYSTEM_ALERT_WINDOW` (see section 4) |
-| F-09 | Low | Exported receivers | **Fixed** for `BootReceiver` and `ChangeMusicCovertReceiver`. Player/share entry points stay exported on purpose |
-| F-10 | Medium | Extra downloader / status-saver package (`a.m.z.*`), cookie reads, Instagram login | **Not fixed** — see section 4 |
-| F-11 | Low | Root/emulator/debugger detection (`za0`) | **Not fixed** — see section 4 |
-| F-12 | Low | Fixed shell commands (`getprop`, logcat) | **Not fixed** — see section 4 |
-| F-13 | Low | Third-party dynamic code loading (Google ads SDK) | **Not fixed** — see section 4 |
-| F-14 | Low | Ad/tracker SDKs, Firebase API key, weak hash names in SDKs | **Not fixed** — see section 4 |
+| F-08 | Medium | Sensitive permissions | **Fixed**: `READ_CLIPBOARD` removed. **Main build keeps** all-files and overlay (you must grant them by hand). **Strict build removes** both. Code read shows the app works without them |
+| F-09 | Low | Exported receivers | **Fixed** for `BootReceiver` and `ChangeMusicCovertReceiver` |
+| F-10 | Medium | Extra downloader / status-saver package, cookie reads, JavaScript bridge | **Reviewed with readable code: no evidence of harm.** Not removed (see section 5) |
+| F-11 | Low | Root/emulator/debugger detection (`za0`) | **Not changed** — harmless, removing adds crash risk |
+| F-12 | Low | Shell commands | **Reviewed:** `getprop` with fixed keys (e.g. `ro.build.version.emui`), and an own-app logcat reader. **Not changed** |
+| F-13 | Low | Third-party dynamic code loading (Google ads SDK) | **Not fixable** without removing ads |
+| F-14 | Low | Ad/tracker SDKs, Firebase key, SDK weak hashes | **Not changed** |
+| **F-15** | **Info (new)** | The real app's own anti-tamper and decoder depend on the original signature | **Handled** by keeping the Java hook; documented below |
 
-## 3. How each fix was checked
+## 4. Change 1, corrected
 
-- **F-01/F-02:** re-parsed the final DEX: `bin.ghost.yrf.<clinit>` starts with `return-void`; no `libyrf`, `classes3`, `pastebin` or `youarefinished` string anywhere in the APK.
-- **F-05/F-07/F-08/F-09:** read the **compiled** manifest and network config in the final APK: cleartext off, no device admin, no `READ_CLIPBOARD`, both receivers `exported=false`.
-- **F-06:** re-parsed the DEX: the `sslSocketFactory` calls and the allow-all hostname verifier set are gone; the `qe0` branch is now an unconditional jump to the old skip target.
-- **Whole package:** ZIP test passes; `apksigner verify` passes (v2 and v3); DEX checksum and SHA-1 verified; all 17,700 classes and 78,000+ methods still parse; resource names identical to the original (13,108 vs 13,108); `aapt` badging unchanged (package, version, SDKs, launcher).
-- **Re-scan:** I re-ran the Phase 1 scan. Counts are the same except for the removed duplicate `bin.ghost` copy. Most categories are normal ad-SDK, Google or OkHttp code, so a count that stays the same does not mean "still a problem". The specific fixes were proven by the targeted checks above.
+- Before: the mod's startup code loaded an unknown native library, called a native helper, installed the Java signature hook, and ran a file redirect.
+- After: **only the Java signature hook is left.** It makes `PackageInfo.signatures` report the original certificate for this app's own package, inside this one process. It does not touch other apps.
+- Why it stays: without it, `libitcore.so` fails to load (logs "signature is error"), `f82.g(...)` then returns raw undecoded text, and the 14 checks kill the process.
+- The cost: the hook uses Java reflection and `sun.misc.Unsafe` to work. Google could break it on a newer Android version. If it does, the app will close itself or crash at start.
 
-## 4. What was NOT fixed, and why
+## 5. What was NOT fixed, and why
 
-- **F-04 Smob obfuscation.** It is baked into the bytecode. I did not try to "unscramble" it. Because apktool cannot read those classes, I changed only exact bytes in the DEX and avoided a full rebuild.
-- **F-08 all-files and overlay permissions.** The app's permission library refuses to request a permission that is missing from the manifest, so removing these two could crash the app when it asks. Neither is granted automatically: you must switch each on in Android Settings. **Don't grant them.** I can build a "strict" variant without them for you to test in an emulator if you want.
-- **F-10 downloader package.** The decoded asset files show it is a real downloader feature (site list, page scripts for Instagram/Facebook/X, a bridge to the app). I found no outside server and no upload code. But I could not compare against the official app, so I cannot say if the mod added it, and I cannot prove it is harmless. **Don't log in to Instagram, Facebook or X inside this app.**
-- **F-11, F-12, F-13, F-14.** Read-only or standard SDK behavior. Removing them would add crash risk and no real safety. The Google Mobile Ads SDK still downloads and loads code at run time; I cannot review that code.
-- **Comparison with the official APK was not done.** The only mirror I found refused automated downloads, and I did not try to get around that. So "what the mod added" in section 5 of `FINDINGS.md` comes from inside this APK only.
+- **The Smob scrambling.** Removing it would not change what the code does. I did not rewrite 17,000 classes.
+- **The downloader module (F-10).** It is a real feature. I decoded its data and read its bridge. It lets the page you are viewing hand video links to the app, and the app fetches pages and sites you open. I found no upload code. A malicious *web page* loaded in its browser could still call the bridge, so **don't browse unknown sites or log in to Instagram, Facebook or X inside it.**
+- **All-files and overlay permissions in the main build.** Use the strict build if you want them gone.
+- **Root/emulator checks (F-11), shell commands (F-12), ad SDK loader (F-13), trackers (F-14).** Standard SDK or app behavior. Removing them adds crash risk and no real safety.
+- **The anti-tamper itself.** I did not remove the app's own self-checks. I made them pass, as the mod did, by keeping `killPM`.
+- **The official APK comparison.** It could not be done. The one mirror I found blocked automated downloads, and I did not try to bypass that. So "what the mod added" comes from inside this APK only. This also means I **cannot prove** the downloader module is original.
 
-## 5. Remaining risk (read this)
+## 6. Remaining risk (read this)
 
-1. **~85% of the code is unreadable.** My checks cover known dangerous APIs and strings. They do not cover logic hidden through reflection, string building, or native code in the other libraries.
-2. **The other 13 native libraries were checked only by strings.** They look like standard media libraries (dav1d, x264, FFmpeg/OpenSSL, mmkv, mp3lame), but I did not disassemble them.
-3. **The mod author already controlled the first code to run.** I removed it, but I cannot see what else they changed inside the scrambled classes.
-4. **Ad and tracking SDKs** (Google Ads, InMobi, Firebase) still run and still send device and ad-ID data. That is normal for the real app too.
-5. **The app can still read a lot if you let it.** Photos and files if you grant storage; clipboard writes; internet access.
-6. **No official signature.** Play Protect cannot vouch for it, and it will not update itself. Any future change needs your key.
+1. I read the code, but I cannot prove there is no hidden logic. I found no sign of any.
+2. I did not disassemble the other 13 native libraries. They were judged by what they import and the strings they hold.
+3. ~4 of 873 hidden strings and some call sites with computed strings were not decoded.
+4. Ad and tracking SDKs (Google Ads, InMobi, Firebase) still run and still send device and ad-ID data. Normal for the real app too.
+5. The in-process certificate hook (section 4) is a hack. It can fail on a future Android release.
+6. The app can still read a lot if you let it: photos and files if you grant storage, and the internet.
+7. No official signature: Play Protect cannot vouch for it, and it will not update itself.
+8. Nothing was run. Every "works" statement is from reading code.
 
-## 6. What to test in an Android emulator (and what could crash)
+## 7. What to test in an Android emulator (and what could crash)
 
-I could not run the app. Use an emulator (Android 11 and 14 images, with Google APIs), with no Google account and no personal files. Watch the network with a tool like PCAPdroid or mitmproxy.
+Use an emulator (Android 13 and 14 images with Google APIs; also try 15), with no Google account and no personal files. Watch network traffic with PCAPdroid or mitmproxy. Install the **main** build first.
 
 **Must-pass**
-1. **Installs and starts.** Install the APK fresh. If it does not install, check that the old modded build is uninstalled first (different signature).
-2. **Cold start does not crash.** The startup code was patched at the very first instruction; a crash here would be in `XPlayerApplication → y90 → bin.ghost.yrf`. Check `adb logcat` for `UnsatisfiedLinkError`, `ClassNotFoundException`, `VerifyError`.
-3. **Play a local video** and a video over **HTTPS**.
-4. **No hidden dialog or outbound call at start.** Confirm no request to `pastebin.com` or `t.me`.
+1. **Installs and starts, and stays open.** If it closes by itself right after launch, the signature hook failed: check `adb logcat` for `signature is error`, `UnsatisfiedLinkError`, `ExceptionInInitializerError`, or `killProcess`.
+2. **Play a local video** and a video over **HTTPS**.
+3. **No outbound call at start** to `pastebin.com` or `t.me`. (It should now only talk to the video/ad/Firebase hosts.)
+4. **Open the built-in browser/downloader screen** — it should load. Do not log in to anything.
 
 **Things that may break or behave differently**
-- **`http://` videos, DLNA/UPnP TV casting, and `http://` sites in the built-in browser** — by design (Change 2).
-- **"File Protection"** — the device-admin request will not work (Change 3).
-- **HTTPS to servers with bad certificates** — these now fail (Change 5).
-- **In-app purchase / VIP / premium state** — the mod may have patched it, and the app no longer reports the original certificate. Some SDKs (Google Play Billing, Firebase) read the app signature, so billing, login, or remote-config features may behave differently.
-- **The downloader and browser** — check they open without crashing, but do not sign in to anything.
-- **A `VerifyError` or `ClassFormatError`** on first launch would mean one of my byte patches is wrong. The risk is small (each patch is a straight `return-void`, `nop`, or same-target `goto`, and the DEX re-parses), but it is the first thing to look for. Send me the `logcat` and I will fix it.
+- **`http://` videos, DLNA/UPnP casting to a TV, `http://` sites in the browser** — by design (Change 2).
+- **"File Protection"** — needs a device-admin request that no longer exists.
+- **HTTPS servers with self-signed or wrong certificates** — now fail.
+- **In-app purchases / VIP state** — the mod may have patched billing; Play Billing sees a different real signature than the hook shows.
+- **Strict build:** the floating (pop-up) player is off. File browsing relies on media permissions only.
+- **A `VerifyError` or `ClassFormatError` at launch** would mean one of my byte patches is wrong. Each is a straight `nop`, same-target `goto` or untouched code, and the DEX re-parses, so the risk is small. Send me the `logcat` if it happens.
 
-## 7. Not verified (summary)
+## 8. Not verified (summary)
 
-- Anything at run time; anything that arrives from a server after install.
-- The scrambled 85% of the code beyond the API/string scan.
-- The machine code of all native libraries.
+- Anything at run time, or that arrives from a server after install (Firebase Remote Config is present).
+- The machine code of the 13 other native libraries.
 - Whether the downloader module is in the official app.
+- That the signature hook works on your exact Android version.
 - Behavior on a real device.
-
-## 8. Optional strict build
-
-`XPlayer_strict_signed.apk` (in the same `final/` folder) also removes `MANAGE_EXTERNAL_STORAGE` and `SYSTEM_ALERT_WINDOW`. It is untested. See the end of `CHANGES.md`. Test it first in an emulator: open the app on a fresh install, go through the permission screen, play a local file, and check `adb logcat` for `IllegalStateException` / "You must add ... permission" messages from the permission library.
-
-## 9. About the "100% safe" goal
-
-This goal cannot be met honestly. Static analysis cannot prove an app is free of hidden behavior, and this app's code is deliberately scrambled. The right target is "removed everything I could find and could safely remove, and said clearly what I could not check". That is what this report does.
