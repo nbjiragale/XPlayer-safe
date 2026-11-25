@@ -165,3 +165,15 @@ Same as the main build, plus (`XPlayer_strict_signed.apk`, SHA-256 `8a58e9872019
 - The permission library's strict storage check (`l85.g`) should not fire: `ScopedStorage=true` and `requestLegacyExternalStorage=true` are already set, and the media permissions stay declared. I found no place in the app's own code that asks the library for all-files or overlay access (the all-files screen is opened with a direct Settings intent, `ob5.P`). I did not trace every caller of the library, so this stays unverified.
 
 **Not tested at run time.** Prefer the strict build if it opens and plays files; use the main build if it does not.
+
+---
+
+## Test-only copies (not for normal use)
+
+`XPlayer_TESTONLY_signed.apk` and `XPlayer_STRICT_TESTONLY_signed.apk` are the main and strict builds with one extra change, used only to test in a slow emulator:
+```
+classes2.dex @ 4597804 : 16 01 10 27  ->  19 01 01 00
+  gh2.a(Activity): const-wide/16 v1, 0x2710   (a 10 second watchdog that shows "Playback failed" if the native player libraries are not loaded in time)
+                -> const-wide/high16 v1, 0x0001 << 48   (the watchdog effectively never fires)
+```
+The shipped main and strict builds keep the original 10-second watchdog. On a normal phone, loading takes well under a second.

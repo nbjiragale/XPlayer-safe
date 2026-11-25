@@ -1,0 +1,15 @@
+# Key log lines from the emulator test (Android 11, API 30, x86_64 + ARM translation, software emulation)
+
+## Libraries loaded in the running app (from /proc/<pid>/maps) -- libitcore.so loading means its signature check PASSED
+libdatastore_shared_counter.so libdav1d.so libinxapi.so libinxffm.so libinxplayer.so libinxutil.so libitcore.so libmmkv.so libmp3lame.so libx264.so (all under lib/arm64)
+
+## Why the MAIN build showed 'Playback failed' in this emulator
+11-25 20:56:44.867 E/----    ( 2753): sendLoadSoTotalTimeEvent: totalTime=32568
+E ----    : sendLoadSoTotalTimeEvent: totalTime=16471
+gh2.a(Activity) posts a 10,000 ms watchdog (const-wide/16 0x2710); library load took 16.5 s and 32.6 s here, so the app's own 'load_so_error' dialog appeared.
+
+## Playback proof (strict build, played from the app's library; the app's own pid)
+11-25 22:00:34.986  8582  8945 D AudioTrack: stop(59): called with 265344 frames delivered
+265,344 frames / 44,100 Hz = 6.02 s = the full length of the 6-second test clip
+
+## Crash indicators across the logs (FATAL EXCEPTION, Fatal signal, SIGSEGV, UnsatisfiedLinkError, 'signature is error', am_crash): none for the app

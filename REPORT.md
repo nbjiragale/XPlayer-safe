@@ -3,7 +3,7 @@
 ## 1. Summary
 
 - The APK is a modded XPlayer 3.0.0 (`video.player.videoplayer`). Phase 1 found 14 findings. Phase 2 fixed what could be fixed safely, one change at a time, and checked each change before the next. After you pushed me to close the "not verified" items, I found real problems in my own first fixes and corrected them.
-- **This is not a claim that the app is safe.** Nobody can prove that from static analysis. But the biggest blind spot is gone: the app's code was 85% unreadable because of an obfuscator, and I got around that. I read it, decoded the ~870 strings it hides, and checked every native library by what it can call. I found no sign of data theft or a hidden control server in what I could read.
+- **This is not a claim that the app is safe.** Nobody can prove that from static analysis. The app was also run in one software-emulated phone (section 9): it starts, loads all its native libraries, shows its library, and plays a video to the end without crashing. But the biggest blind spot is gone: the app's code was 85% unreadable because of an obfuscator, and I got around that. I read it, decoded the ~870 strings it hides, and checked every native library by what it can call. I found no sign of data theft or a hidden control server in what I could read.
 - **Important correction.** The two APKs I sent earlier were **wrong**. They removed the mod's whole startup hook. But the real XPlayer has its own anti-tamper (14 inlined checks plus its native decoder `libitcore.so`) that closes the app if the signing certificate is not the developer's. Those builds would have shut themselves down. The new builds below keep only the small Java hook that the app needs for that, and nothing else from the mod.
 
 **Use these files (they replace the earlier APKs):**
@@ -77,7 +77,7 @@ Neither is in the repository (`.gitignore` blocks `*.apk`, `*.jks`, `*.keystore`
 5. The in-process certificate hook (section 4) is a hack. It can fail on a future Android release.
 6. The app can still read a lot if you let it: photos and files if you grant storage, and the internet.
 7. No official signature: Play Protect cannot vouch for it, and it will not update itself.
-8. Nothing was run. Every "works" statement is from reading code.
+8. The app was run in only one environment: a slow, software-emulated Android 11 phone (section 9). Android 12 to 15, a real phone, the browser/downloader, casting and in-app purchases were not run.
 
 ## 7. What to test in an Android emulator (and what could crash)
 
@@ -103,4 +103,31 @@ Use an emulator (Android 13 and 14 images with Google APIs; also try 15), with n
 - The machine code of the 13 other native libraries.
 - Whether the downloader module is in the official app.
 - That the signature hook works on your exact Android version.
-- Behavior on a real device.
+- Behavior on a real device, and on Android versions other than 11 (the in-process certificate hook is the part most likely to break on a newer Android).
+
+## 9. Emulator test results (run in this environment)
+
+**Setup.** Android 11 (API 30) x86_64 Google APIs image, headless, in **software emulation** (this environment has no hardware virtualization), 2 virtual CPUs, 3 GB RAM. The image runs this app's ARM-only native libraries through its ARM translation layer. Everything is very slow, so Android's own watchdog restarted the system process several times during boot and install. That is an environment limit and not an app problem. Evidence: `evidence/` (7 screenshots and `emulator_test_log.txt`).
+
+| Test | Build | Result |
+|---|---|---|
+| Install | main | **Passes.** Android picked `arm64-v8a`, saw my new signing key |
+| Start | main | **Passes.** No crash, no process kill, no `signature is error`, no `UnsatisfiedLinkError`. Splash, then the app's first-run permission screen |
+| Native libraries | main | **All 10 app libraries loaded**, including `libitcore.so`. Its `JNI_OnLoad` runs the signature check and unloads on failure, so **the signature hook works and the app's anti-tamper accepted it** |
+| Library screen | main and strict | **Passes.** "Premium" screen, folders, my test video found and shown |
+| Thumbnail | main | **Passes.** The app decoded a frame from the test clip and read its length (00:06) |
+| Play a video | **main (as shipped)** | **Fails in this emulator only.** The app shows "Playback failed" (its string `load_so_error_content`). Cause: it has a **10-second watchdog** on loading its native player libraries (`gh2.a` posts a 10,000 ms timer). Loading took 16.5 s and 32.6 s here, but did finish. On a normal phone loading takes well under a second |
+| Play a video | test-only copies (watchdog stretched; 3 bytes differ) of **main** and **strict** | **Passes.** The app opened the clip from its library. Its own process logged `AudioTrack: stop: 265,344 frames delivered` = 6.02 s = the whole clip. The player closed itself on completion. The thumbnail got the "watched" progress bar. No crash |
+| Strict build (no all-files, no overlay) | strict (test-only copy) | **Passes** the same library playback test. No special permission needed |
+| Open by file path from outside (`file://` VIEW) | main | The player opens but asks "XPlayer can't access this video. Please allow access to All Files". This is Android 11 scoped storage and the app's own rule. The strict build cannot satisfy it. Opening from the app's library works without it |
+
+**What this does and does not prove**
+- It proves the fixed app is not broken in the ways I feared: no self-kill, the native libraries and certificate check work, and a real video decodes and plays through the app's own FFmpeg pipeline.
+- It does **not** prove that picture frames were rendered correctly. The emulator was too slow to catch a frame on screenshot. The evidence for playback is the full audio delivery, the clean player lifecycle (open at 21:58:56, finish at 22:00:27), and the watched-state change.
+- The two shipped APKs differ from the tested copies by one constant (the 10-second watchdog, 3 bytes plus the DEX header). I tested copies and not the shipped bytes, because the shipped bytes cannot finish loading inside this emulator's 10-second window.
+- Only Android 11 was tested. Android 12 to 15 were not.
+- The browser/downloader, casting, in-app purchase, notifications, picture-in-picture and background playback were not tested.
+- Mistake worth knowing about: early in testing I hid Android's error dialogs, which made Android kill the app after its first "not responding" prompt. I turned that off and re-ran. The earlier "kills" were caused by that setting, not by the app.
+
+**Test-only copies** (same signing key, same code except the 10-second timer, for slow emulators only; you do not need them on a real phone or a hardware-accelerated emulator):
+`/tmp/claude-0/-home-user-XPlayer-safe/49bf11d1-7853-5759-a5cd-203f796f3864/scratchpad/final/XPlayer_TESTONLY_signed.apk` and `.../XPlayer_STRICT_TESTONLY_signed.apk`.
