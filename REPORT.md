@@ -89,3 +89,11 @@ I could not run the app. Use an emulator (Android 11 and 14 images, with Google 
 - The machine code of all native libraries.
 - Whether the downloader module is in the official app.
 - Behavior on a real device.
+
+## 8. Optional strict build
+
+`XPlayer_strict_signed.apk` (in the same `final/` folder) also removes `MANAGE_EXTERNAL_STORAGE` and `SYSTEM_ALERT_WINDOW`. It is untested. See the end of `CHANGES.md`. Test it first in an emulator: open the app on a fresh install, go through the permission screen, play a local file, and check `adb logcat` for `IllegalStateException` / "You must add ... permission" messages from the permission library.
+
+## 9. About the "100% safe" goal
+
+This goal cannot be met honestly. Static analysis cannot prove an app is free of hidden behavior, and this app's code is deliberately scrambled. The right target is "removed everything I could find and could safely remove, and said clearly what I could not check". That is what this report does.

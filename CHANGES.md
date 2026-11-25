@@ -140,3 +140,14 @@ The unused `w53` object is still created in three places but is no longer instal
 - New key: RSA 4096, SHA-256, `CN=XPlayer-safe local build`. Certificate SHA-256 `c304a3767607d153d040c4530a236184073e6723f059cceb4b49e1117475ead9`.
 - Keystore password is in a **separate** file (see REPORT.md). It is not in the repository.
 - `apksigner verify`: v2 true, v3 true.
+
+---
+
+## Optional variant — "strict" build (removes the two biggest permissions)
+
+Same as the main build, plus (`XPlayer_strict_signed.apk`, SHA-256 `f72c0ec4befb1be5d62cb8ff91677cab78e6dedc133de10be262cfc445b78782`, same signing key):
+```diff
+-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+```
+`classes.dex` is byte-identical to the main build. **Not tested at run time.** The app's permission library may throw when the app asks for one of these missing permissions (for example on the first-run permission screen on Android 11+), so it can crash or get stuck. Test it in an emulator. If it works, prefer it over the main build. If it crashes, use the main build and do not grant all-files or overlay access.
